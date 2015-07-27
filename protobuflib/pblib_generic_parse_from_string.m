@@ -60,57 +60,63 @@ function [msg, num_read] = pblib_generic_parse_from_string(...
     put(msg.has_field, field.name, 0);
     msg.(field.name) = field.default_value;
   end
-
+  % Create empty list for unknown fields
   msg.unknown_fields = [];
-  num_read = buffer_start - 1;
-  while (num_read < buffer_end)
-    [number, wire_type, tag_len] = pblib_read_tag(buffer, num_read + 1);
-    index = get(descriptor.field_indeces_by_number, number);
-    [wire_value, temp_num_read] = pblib_read_wire_type(buffer, num_read + tag_len + 1, wire_type);
-    if (~isempty(index))
-      field = descriptor.fields(index);
-      if (field.wire_type ~= wire_type && ~field.options.packed)
-        error('proto:read:wire_type_mismatch', ...
-              ['Wire type mismatch while reading ' field.name ...
-               '. Got ' num2str(wire_type) ' but expected ' ...
-               num2str(field.wire_type)]);
-      end
-      if field.label == LABEL_REPEATED
-        if field.options.packed
-          msg.(field.name) = read_packed_field(field, wire_value);
-        else
-          % strings and byte arrays must be stored in cell arrays
-          % and so need special treatment
-          if (field.matlab_type == 7 || field.matlab_type == 8) % 'string' or 'bytes'
-            if (get(msg.has_field, field.name))
-              msg.(field.name) = [msg.(field.name) field.read_function(wire_value)];
+  
+  % Skip parse if the buffer is empty
+  if(buffer_end > buffer_start)
+  
+      num_read = buffer_start - 1;
+      while (num_read < buffer_end)
+        [number, wire_type, tag_len] = pblib_read_tag(buffer, num_read + 1);
+        index = get(descriptor.field_indeces_by_number, number);
+        [wire_value, temp_num_read] = pblib_read_wire_type(buffer, num_read + tag_len + 1, wire_type);
+        if (~isempty(index))
+          field = descriptor.fields(index);
+          if (field.wire_type ~= wire_type && ~field.options.packed)
+            error('proto:read:wire_type_mismatch', ...
+                  ['Wire type mismatch while reading ' field.name ...
+                   '. Got ' num2str(wire_type) ' but expected ' ...
+                   num2str(field.wire_type)]);
+          end
+          if field.label == LABEL_REPEATED
+            if field.options.packed
+              msg.(field.name) = read_packed_field(field, wire_value);
             else
-              msg.(field.name) = {field.read_function(wire_value)};
+              % strings and byte arrays must be stored in cell arrays
+              % and so need special treatment
+              if (field.matlab_type == 7 || field.matlab_type == 8) % 'string' or 'bytes'
+                if (get(msg.has_field, field.name))
+                  msg.(field.name) = [msg.(field.name) field.read_function(wire_value)];
+                else
+                  msg.(field.name) = {field.read_function(wire_value)};
+                end
+              else
+                msg.(field.name) = [msg.(field.name) field.read_function(wire_value)];
+              end
             end
           else
-            msg.(field.name) = [msg.(field.name) field.read_function(wire_value)];
+            msg.(field.name) = field.read_function(wire_value);
           end
+          put(msg.has_field, field.name, 1);
+        else
+          msg.unknown_fields = [...
+              msg.unknown_fields struct(...
+                  'number', number, 'wire_type', wire_type, ...
+                  'raw_data', buffer(num_read + 1 : num_read + tag_len + temp_num_read))];
         end
-      else
-        msg.(field.name) = field.read_function(wire_value);
+        num_read = num_read + tag_len + temp_num_read;
       end
-      put(msg.has_field, field.name, 1);
-    else
-      msg.unknown_fields = [...
-          msg.unknown_fields struct(...
-              'number', number, 'wire_type', wire_type, ...
-              'raw_data', buffer(num_read + 1 : num_read + tag_len + temp_num_read))];
-    end
-    num_read = num_read + tag_len + temp_num_read;
-  end
 
-  % Check to make sure required fields have been read in We will only issue a warning if
-  % they haven't so that debugging the final message would be easier
-  for field=descriptor.fields
-    if field.label == LABEL_REQUIRED && ~get(msg.has_field, field.name)
-      warning('proto:read:required_enforcement', ...
-              'Required field not set while parsing. This is an error.')
-    end
+      % Check to make sure required fields have been read in We will only issue a warning if
+      % they haven't so that debugging the final message would be easier
+      for field=descriptor.fields
+        if field.label == LABEL_REQUIRED && ~get(msg.has_field, field.name)
+          warning('proto:read:required_enforcement', ...
+                  'Required field not set while parsing. This is an error.')
+        end
+      end
+  
   end
 
 function [values] = read_packed_field(field, wire_value)
